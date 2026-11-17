@@ -17,6 +17,9 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        NSPhotoLibraryUsageDescription: "Erlaubt das Speichern von heruntergeladenen Folgen in deinen Fotos."
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.aniworld
