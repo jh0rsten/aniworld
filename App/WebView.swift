@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import Photos
+import AVFoundation
 
 struct WebView: UIViewRepresentable {
     let url: URL
@@ -21,11 +22,11 @@ struct WebView: UIViewRepresentable {
         let mainJS = """
         window.detectedVideoUrl = null;
         window.addEventListener('message', (e) => {
-            if (e.data && e.data.type === 'FOUND_VIDEO_URL') {
+            if (e.data && e.data.type === 'FOUND_VIDEO_URL' && e.data.url) {
                 window.detectedVideoUrl = e.data.url;
                 const btn = document.getElementById('custom-ipa-dl-btn');
                 if (btn) {
-                    btn.innerText = 'Video herunterladen';
+                    btn.innerText = 'Video herunterladen (Bereit)';
                     btn.style.background = '#007AFF';
                 }
             }
@@ -55,7 +56,7 @@ struct WebView: UIViewRepresentable {
             const btn = document.createElement('button');
             btn.id = 'custom-ipa-dl-btn';
             btn.type = 'button';
-            btn.innerText = 'Video starten zum Herunterladen';
+            btn.innerText = 'Video im Player starten...';
             btn.style.cssText = 'display:block;width:100%;padding:14px;margin:12px 0;background:#444444;color:#ffffff;border:none;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer;position:relative;z-index:9999;';
 
             btn.onclick = (e) => {
@@ -63,12 +64,16 @@ struct WebView: UIViewRepresentable {
                 e.stopPropagation();
                 const vid = document.querySelector('video');
                 const dlUrl = window.detectedVideoUrl || (vid ? (vid.currentSrc || vid.src) : null);
-                if (dlUrl && !dlUrl.startsWith('blob:')) {
-                    btn.innerText = 'Download läuft...';
+                if (dlUrl && dlUrl.startsWith('http')) {
+                    btn.innerText = 'Download gestartet...';
                     btn.style.background = '#FF9500';
                     window.webkit.messageHandlers.videoDownloader.postMessage(dlUrl);
+                } else if (dlUrl && dlUrl.startsWith('blob:')) {
+                    btn.innerText = 'Blob-Stream nicht direkt ladbar (anderen Hoster testen)';
+                    btn.style.background = '#FF3B30';
                 } else {
-                    alert('Bitte starte zuerst das Video im Player.');
+                    btn.innerText = 'Bitte zuerst Play im Video drücken!';
+                    setTimeout(() => { btn.innerText = 'Video im Player starten...'; }, 2500);
                 }
             };
 
@@ -78,6 +83,23 @@ struct WebView: UIViewRepresentable {
         config.userContentController.addUserScript(WKUserScript(source: mainJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         
         let iframeJS = """
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url) {
+            if (typeof url === 'string' && (url.includes('.m3u8') || url.includes('.mp4'))) {
+                const fullUrl = new URL(url, window.location.href).href;
+                window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: fullUrl }, '*');
+            }
+            return origOpen.apply(this, arguments);
+        };
+        const origFetch = window.fetch;
+        window.fetch = function(input) {
+            const url = typeof input === 'string' ? input : (input && input.url);
+            if (url && (url.includes('.m3u8') || url.includes('.mp4'))) {
+                const fullUrl = new URL(url, window.location.href).href;
+                window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: fullUrl }, '*');
+            }
+            return origFetch.apply(this, arguments);
+        };
         setInterval(() => {
             document.querySelectorAll('video').forEach(v => {
                 const s = v.querySelector('source');
@@ -88,7 +110,7 @@ struct WebView: UIViewRepresentable {
             });
         }, 1000);
         """
-        config.userContentController.addUserScript(WKUserScript(source: iframeJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+        config.userContentController.addUserScript(WKUserScript(source: iframeJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         config.userContentController.add(context.coordinator, name: "videoDownloader")
         
         let web = WKWebView(frame: .zero, configuration: config)
@@ -123,7 +145,33 @@ struct WebView: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "videoDownloader", let str = message.body as? String, let videoURL = URL(string: str) else { return }
             showBanner(text: "Video wird heruntergeladen...", color: .systemOrange)
-            downloadVideo(from: videoURL)
+            if str.contains(".m3u8") {
+                downloadHLSStream(from: videoURL)
+            } else {
+                downloadVideo(from: videoURL)
+            }
+        }
+        
+        private func downloadHLSStream(from url: URL) {
+            let asset = AVURLAsset(url: url)
+            guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+                showBanner(text: "Stream-Export nicht moeglich", color: .systemRed)
+                return
+            }
+            let fm = FileManager.default
+            let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)
+            let dest = docs.appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+            try? fm.removeItem(at: dest)
+            exporter.outputURL = dest
+            exporter.outputFileType = .mp4
+            exporter.exportAsynchronously { [weak self] in
+                guard let self = self else { return }
+                if exporter.status == .completed {
+                    self.saveToPhotos(fileURL: dest)
+                } else {
+                    self.showBanner(text: "Stream-Fehler: \(exporter.error?.localizedDescription ?? "Unbekannt")", color: .systemRed)
+                }
+            }
         }
         
         private func downloadVideo(from url: URL) {
@@ -133,46 +181,19 @@ struct WebView: UIViewRepresentable {
                 guard let temp = temp else { self.showBanner(text: "Download fehlgeschlagen", color: .systemRed); return }
                 
                 let fm = FileManager.default
-                let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)
                 let dest = docs.appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
                 try? fm.removeItem(at: dest)
                 do {
                     try fm.moveItem(at: temp, to: dest)
-                    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-                        if status == .authorized || status == .limited {
-                            PHPhotoLibrary.shared().performChanges({
-                                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: dest)
-                            }) { ok, _ in
-                                self.showBanner(text: ok ? "Fertig! In Fotos & Dateien gespeichert." : "In der Dateien-App gespeichert.", color: .systemGreen)
-                            }
-                        } else {
-                            self.showBanner(text: "In der Dateien-App gespeichert.", color: .systemGreen)
-                        }
-                    }
+                    self.saveToPhotos(fileURL: dest)
                 } catch {
                     self.showBanner(text: "Speicherfehler: \(error.localizedDescription)", color: .systemRed)
                 }
             }.resume()
         }
         
-        private func showBanner(text: String, color: UIColor) {
-            DispatchQueue.main.async {
-                guard let web = self.webView else { return }
-                web.viewWithTag(98765)?.removeFromSuperview()
-                let lbl = UILabel()
-                lbl.tag = 98765
-                lbl.text = text
-                lbl.textColor = .white
-                lbl.backgroundColor = color.withAlphaComponent(0.95)
-                lbl.font = .boldSystemFont(ofSize: 14)
-                lbl.textAlignment = .center
-                lbl.numberOfLines = 2
-                lbl.layer.cornerRadius = 12
-                lbl.clipsToBounds = true
-                lbl.frame = CGRect(x: 16, y: web.safeAreaInsets.top + 12, width: web.bounds.width - 32, height: 48)
-                web.addSubview(lbl)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { lbl.removeFromSuperview() }
-            }
-        }
-    }
-}
+        private func saveToPhotos(fileURL: URL) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                if status == .authorized || status == .limited {
+                    PHPhotoLibrary.shared().performChanges({
