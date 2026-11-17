@@ -31,10 +31,10 @@ jobs:
       - name: IPA packen
         run: |
           mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/YTApp.app Payload/
-          zip -r YTApp.ipa Payload
+          cp -R build/Build/Products/Release-iphoneos/Aniworld.app Payload/
+          zip -r Aniworld.ipa Payload/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: YTApp-ipa
-          path: YTApp.ipa
+          name: Aniworld-ipa
+          path: Aniworld.ipa

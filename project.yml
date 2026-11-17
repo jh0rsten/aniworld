@@ -1,4 +1,4 @@
-name: YTApp
+name: Aniworld
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
@@ -11,7 +11,7 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: YouTube Web
+        CFBundleDisplayName: Aniworld
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -19,7 +19,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.ytapp
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.aniworld
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGNING_ALLOWED: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
