@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-IPA_URL="https://github.com/jh0rsten/aniworld/releases/download/v1.0/Aniworld.ipa
+IPA_URL="https://github.com/jh0rsten/aniworld/releases/download/v1.0/Aniworld.ipa"
 WORK_DIR="$HOME/.aniworld-installer"
 IPA_FILE="$WORK_DIR/Aniworld.ipa"
 
