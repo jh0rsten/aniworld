@@ -32,12 +32,32 @@ struct WebView: UIViewRepresentable {
         });
         setInterval(() => {
             if (document.getElementById('custom-ipa-dl-btn')) return;
-            const target = document.querySelector('.inSiteWebStream iframe, iframe[allowfullscreen], iframe, video');
-            if (!target || !target.parentNode) return;
+
+            let bestFrame = null;
+            let maxArea = 0;
+            document.querySelectorAll('iframe, video').forEach(el => {
+                const rect = el.getBoundingClientRect();
+                const area = rect.width * rect.height;
+                if (rect.width > 200 && rect.height > 120 && area > maxArea) {
+                    maxArea = area;
+                    bestFrame = el;
+                }
+            });
+
+            if (!bestFrame) return;
+
+            let container = bestFrame.closest('.inSiteWebStream, .hosterSiteVideo, .stream-wrapper') || bestFrame.parentElement;
+            while (container && container.parentElement && getComputedStyle(container).overflow === 'hidden') {
+                container = container.parentElement;
+            }
+            if (!container || !container.parentNode) return;
+
             const btn = document.createElement('button');
             btn.id = 'custom-ipa-dl-btn';
+            btn.type = 'button';
             btn.innerText = 'Video starten zum Herunterladen';
-            btn.style.cssText = 'display:block;width:100%;padding:14px;margin:10px 0;background:#555;color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:bold;z-index:999999;position:relative;';
+            btn.style.cssText = 'display:block;width:100%;padding:14px;margin:12px 0;background:#444444;color:#ffffff;border:none;border-radius:8px;font-size:16px;font-weight:bold;cursor:pointer;position:relative;z-index:9999;';
+
             btn.onclick = (e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -51,9 +71,9 @@ struct WebView: UIViewRepresentable {
                     alert('Bitte starte zuerst das Video im Player.');
                 }
             };
-            const wrap = target.closest('.inSiteWebStream') || target.parentNode;
-            wrap.parentNode.insertBefore(btn, wrap.nextSibling);
-        }, 1500);
+
+            container.parentNode.insertBefore(btn, container.nextSibling);
+        }, 1000);
         """
         config.userContentController.addUserScript(WKUserScript(source: mainJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         
@@ -66,7 +86,7 @@ struct WebView: UIViewRepresentable {
                     window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: src }, '*');
                 }
             });
-        }, 1500);
+        }, 1000);
         """
         config.userContentController.addUserScript(WKUserScript(source: iframeJS, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
         config.userContentController.add(context.coordinator, name: "videoDownloader")
