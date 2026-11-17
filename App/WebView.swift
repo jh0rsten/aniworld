@@ -129,7 +129,8 @@ struct WebView: UIViewRepresentable {
                 showBanner(text: "Stream-Export nicht moeglich", color: .systemRed); return
             }
             let fm = FileManager.default
-            let dest = fm.urls(for: .documentDirectory, in: .userDomainMask).appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+            let dest = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+
             try? fm.removeItem(at: dest)
             exporter.outputURL = dest
             exporter.outputFileType = .mp4
@@ -148,7 +149,8 @@ struct WebView: UIViewRepresentable {
                 if let err = err { self.showBanner(text: "Fehler: \(err.localizedDescription)", color: .systemRed); return }
                 guard let temp = temp else { self.showBanner(text: "Download fehlgeschlagen", color: .systemRed); return }
                 let fm = FileManager.default
-                let dest = fm.urls(for: .documentDirectory, in: .userDomainMask).appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+                let dest = fm.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+
                 try? fm.removeItem(at: dest)
                 do { try fm.moveItem(at: temp, to: dest); self.saveToPhotos(fileURL: dest) }
                 catch { self.showBanner(text: "Speicherfehler: \(error.localizedDescription)", color: .systemRed) }
