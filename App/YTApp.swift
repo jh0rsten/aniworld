@@ -4,7 +4,7 @@ import SwiftUI
 struct YTApp: App {
     var body: some Scene {
         WindowGroup {
-            WebView(url: URL(string: "https://m.youtube.com")!)
+            WebView(url: URL(string: "https://aniworld.to")!)
                 .ignoresSafeArea(edges: .bottom)
         }
     }

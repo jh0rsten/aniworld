@@ -6,10 +6,7 @@ struct WebView: UIViewRepresentable {
 
     // Nur diese Domains (und Subdomains) dürfen als Hauptseite geladen werden.
     static let allowedHosts = [
-        "youtube.com",
-        "youtu.be",
-        "accounts.google.com",
-        "google.com"
+        "aniworld.to",
     ]
 
     func makeCoordinator() -> Coordinator { Coordinator() }
