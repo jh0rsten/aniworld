@@ -20,10 +20,10 @@ struct WebView: UIViewRepresentable {
         config.userContentController.addUserScript(popupScript)
         
         let mainJS = """
-        window.detectedVideoUrl = null;
+        window.detectedVideoData = null;
         window.addEventListener('message', (e) => {
             if (e.data && e.data.type === 'FOUND_VIDEO_URL' && e.data.url) {
-                window.detectedVideoUrl = e.data.url;
+                window.detectedVideoData = { url: e.data.url, referer: e.data.referer || window.location.href };
                 const btn = document.getElementById('custom-ipa-dl-btn');
                 if (btn) { btn.innerText = 'Video herunterladen (Bereit)'; btn.style.background = '#007AFF'; }
             }
@@ -45,12 +45,10 @@ struct WebView: UIViewRepresentable {
             btn.onclick = (e) => {
                 e.preventDefault(); e.stopPropagation();
                 const vid = document.querySelector('video');
-                const dlUrl = window.detectedVideoUrl || (vid ? (vid.currentSrc || vid.src) : null);
-                if (dlUrl && dlUrl.startsWith('http')) {
-                    btn.innerText = 'Download gestartet...'; btn.style.background = '#FF9500';
-                    window.webkit.messageHandlers.videoDownloader.postMessage(dlUrl);
-                } else if (dlUrl && dlUrl.startsWith('blob:')) {
-                    btn.innerText = 'Blob-Stream nicht direkt ladbar (anderen Hoster testen)'; btn.style.background = '#FF3B30';
+                const data = window.detectedVideoData || (vid && (vid.currentSrc || vid.src) ? { url: (vid.currentSrc || vid.src), referer: window.location.href } : null);
+                if (data && data.url.startsWith('http')) {
+                    btn.innerText = 'Download läuft...'; btn.style.background = '#FF9500';
+                    window.webkit.messageHandlers.videoDownloader.postMessage(data);
                 } else {
                     btn.innerText = 'Bitte zuerst Play im Video drücken!';
                     setTimeout(() => { btn.innerText = 'Video im Player starten...'; }, 2500);
@@ -62,26 +60,20 @@ struct WebView: UIViewRepresentable {
         config.userContentController.addUserScript(WKUserScript(source: mainJS, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         
         let iframeJS = """
-        const origOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(m, u) {
+        const sendUrl = (u) => {
             if (typeof u === 'string' && (u.includes('.m3u8') || u.includes('.mp4'))) {
-                window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: new URL(u, window.location.href).href }, '*');
+                window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: new URL(u, window.location.href).href, referer: window.location.href }, '*');
             }
-            return origOpen.apply(this, arguments);
         };
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(m, u) { sendUrl(u); return origOpen.apply(this, arguments); };
         const origFetch = window.fetch;
-        window.fetch = function(i) {
-            const u = typeof i === 'string' ? i : (i && i.url);
-            if (u && (u.includes('.m3u8') || u.includes('.mp4'))) {
-                window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: new URL(u, window.location.href).href }, '*');
-            }
-            return origFetch.apply(this, arguments);
-        };
+        window.fetch = function(i) { sendUrl(typeof i === 'string' ? i : (i && i.url)); return origFetch.apply(this, arguments); };
         setInterval(() => {
             document.querySelectorAll('video').forEach(v => {
                 const s = v.querySelector('source');
                 const src = v.currentSrc || v.src || (s ? s.src : null);
-                if (src && src.startsWith('http')) window.top.postMessage({ type: 'FOUND_VIDEO_URL', url: src }, '*');
+                if (src && src.startsWith('http')) sendUrl(src);
             });
         }, 1000);
         """
@@ -118,18 +110,26 @@ struct WebView: UIViewRepresentable {
         }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "videoDownloader", let str = message.body as? String, let videoURL = URL(string: str) else { return }
+            guard message.name == "videoDownloader",
+                  let dict = message.body as? [String: String],
+                  let str = dict["url"],
+                  let videoURL = URL(string: str) else { return }
+            let referer = dict["referer"] ?? "https://aniworld.to"
             showBanner(text: "Video wird heruntergeladen...", color: .systemOrange)
-            str.contains(".m3u8") ? downloadHLSStream(from: videoURL) : downloadVideo(from: videoURL)
+            str.contains(".m3u8") ? downloadHLSStream(from: videoURL, referer: referer) : downloadVideo(from: videoURL, referer: referer)
         }
         
-        private func downloadHLSStream(from url: URL) {
-            let asset = AVURLAsset(url: url)
-            guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+        private func downloadHLSStream(from url: URL, referer: String) {
+            let headers = [
+                "Referer": referer,
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            ]
+            let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
+            guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
                 showBanner(text: "Stream-Export nicht moeglich", color: .systemRed); return
             }
             let fm = FileManager.default
-            let dest = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+            let dest = fm.urls(for: .documentDirectory, in: .userDomainMask).appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
             try? fm.removeItem(at: dest)
             exporter.outputURL = dest
             exporter.outputFileType = .mp4
@@ -139,13 +139,16 @@ struct WebView: UIViewRepresentable {
             }
         }
         
-        private func downloadVideo(from url: URL) {
-            URLSession.shared.downloadTask(with: url) { [weak self] temp, _, err in
+        private func downloadVideo(from url: URL, referer: String) {
+            var req = URLRequest(url: url)
+            req.setValue(referer, forHTTPHeaderField: "Referer")
+            req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+            URLSession.shared.downloadTask(with: req) { [weak self] temp, _, err in
                 guard let self = self else { return }
                 if let err = err { self.showBanner(text: "Fehler: \(err.localizedDescription)", color: .systemRed); return }
                 guard let temp = temp else { self.showBanner(text: "Download fehlgeschlagen", color: .systemRed); return }
                 let fm = FileManager.default
-                let dest = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
+                let dest = fm.urls(for: .documentDirectory, in: .userDomainMask).appendingPathComponent("Anime_\(Int(Date().timeIntervalSince1970)).mp4")
                 try? fm.removeItem(at: dest)
                 do { try fm.moveItem(at: temp, to: dest); self.saveToPhotos(fileURL: dest) }
                 catch { self.showBanner(text: "Speicherfehler: \(error.localizedDescription)", color: .systemRed) }
@@ -157,24 +160,23 @@ struct WebView: UIViewRepresentable {
                 if status == .authorized || status == .limited {
                     PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileURL) }) { ok, _ in
                         self.showBanner(text: ok ? "Fertig! In Fotos & Dateien gespeichert." : "In der Dateien-App gespeichert.", color: .systemGreen)
-                    }
-                } else {
-                    self.showBanner(text: "In der Dateien-App gespeichert.", color: .systemGreen)
-                }
-            }
-        }
-        
-        private func showBanner(text: String, color: UIColor) {
-            DispatchQueue.main.async {
-                guard let web = self.webView else { return }
-                web.viewWithTag(98765)?.removeFromSuperview()
-                let lbl = UILabel()
-                lbl.tag = 98765; lbl.text = text; lbl.textColor = .white; lbl.backgroundColor = color.withAlphaComponent(0.95)
-                lbl.font = .boldSystemFont(ofSize: 14); lbl.textAlignment = .center; lbl.numberOfLines = 2
-                lbl.layer.cornerRadius = 12; lbl.clipsToBounds = true
-                lbl.frame = CGRect(x: 16, y: web.safeAreaInsets.top + 12, width: web.bounds.width - 32, height: 48)
-                web.addSubview(lbl)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { lbl.removeFromSuperview() }
+}
+} else {
+self.showBanner(text: "In der Dateien-App gespeichert.", color: .systemGreen)
+}
+}
+}
+private func showBanner(text: String, color: UIColor) {
+DispatchQueue.main.async {
+guard let web = self.webView else { return }
+web.viewWithTag(98765)?.removeFromSuperview()
+let lbl = UILabel()
+lbl.tag = 98765; lbl.text = text; lbl.textColor = .white; lbl.backgroundColor = color.withAlphaComponent(0.95)
+lbl.font = .boldSystemFont(ofSize: 14); lbl.textAlignment = .center; lbl.numberOfLines = 2
+lbl.layer.cornerRadius = 12; lbl.clipsToBounds = true
+lbl.frame = CGRect(x: 16, y: web.safeAreaInsets.top + 12, width: web.bounds.width - 32, height: 48)
+web.addSubview(lbl)
+DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { lbl.removeFromSuperview() }
 }
 }
 }
